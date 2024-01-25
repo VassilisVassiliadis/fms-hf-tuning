@@ -13,7 +13,7 @@ from tuning.utils.data_type_utils import get_torch_dtype
 from tuning.aim_loader import get_aimstack_callback
 from transformers.utils import logging
 from dataclasses import asdict
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 from peft import LoraConfig
 import os
@@ -34,7 +34,8 @@ def train(
         data_args: configs.DataArguments,
         train_args: configs.TrainingArguments,
         peft_config: Optional[Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]] = None,
-   ):
+        callbacks: Optional[List[TrainerCallback]] = None,
+   ) -> transformers.trainer.TrainOutput:
     """Call the SFTTrainer
 
     Args:
@@ -45,6 +46,10 @@ def train(
           peft_config.PromptTuningConfig for prompt tuning | \
           None for fine tuning
             The peft configuration to pass to trainer
+        callbacks: optional SFTTrainer callbacks
+
+    Returns:
+        The TrainOutput of SFTTrainer.train()
     """
     run_distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
 
@@ -134,7 +139,8 @@ def train(
     logger.info(f"Dataset length is {len(formatted_dataset)}")
 
     aim_callback = get_aimstack_callback()
-    callbacks=[aim_callback,PeftSavingCallback()]
+    callbacks = callbacks or []
+    callbacks.extend([aim_callback, PeftSavingCallback()])
 
     if train_args.packing:
         logger.info("Packing is set to True")
@@ -168,7 +174,9 @@ def train(
 
     if run_distributed and peft_config is not None:
         trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(model)
-    trainer.train()
+
+    return trainer.train()
+
 
 def main(**kwargs):
     parser = transformers.HfArgumentParser(dataclass_types=(configs.ModelArguments, 
