@@ -4,6 +4,7 @@ from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 import transformers
 import torch
 import datasets
+import time
 
 from tuning.data import tokenizer_data_utils
 from tuning.config import configs, peft_config
@@ -13,7 +14,7 @@ from tuning.utils.data_type_utils import get_torch_dtype
 from tuning.aim_loader import get_aimstack_callback
 from transformers.utils import logging
 from dataclasses import asdict
-from typing import Optional, Union, List
+from typing import Optional, Union, List, NamedTuple
 
 from peft import LoraConfig
 import os
@@ -29,13 +30,18 @@ class PeftSavingCallback(TrainerCallback):
             os.remove(os.path.join(checkpoint_path, "pytorch_model.bin"))
 
 
+class EnhancedTrainOutput(NamedTuple):
+    train_output: transformers.trainer.TrainOutput
+    model_load_time: float
+
+
 def train(
         model_args: configs.ModelArguments,
         data_args: configs.DataArguments,
         train_args: configs.TrainingArguments,
         peft_config: Optional[Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-   ) -> transformers.trainer.TrainOutput:
+   ) -> EnhancedTrainOutput:
     """Call the SFTTrainer
 
     Args:
@@ -49,7 +55,8 @@ def train(
         callbacks: optional SFTTrainer callbacks
 
     Returns:
-        The TrainOutput of SFTTrainer.train()
+        A EnhancedTrainOutput containing the TrainOutput of SFTTrainer.train() plus extra metrics
+        such as model_load_time
     """
     run_distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
 
@@ -67,13 +74,15 @@ def train(
         train_args.fsdp_config = {'xla':False}
 
     task_type = "CAUSAL_LM"
+
+    instrument_model_load = time.time()
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=train_args.cache_dir,
         torch_dtype=get_torch_dtype(model_args.torch_dtype),
         use_flash_attention_2=model_args.use_flash_attn,
     )
-    
+    instrument_model_load = time.time() - instrument_model_load
     peft_config = get_hf_peft_config(task_type, peft_config)
 
     model.gradient_checkpointing_enable()
@@ -175,7 +184,14 @@ def train(
     if run_distributed and peft_config is not None:
         trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(model)
 
-    return trainer.train()
+    train_output: "transformers.trainer.TrainOutput" = trainer.train()
+
+    aim_callback.experiment['model_load_time'] = instrument_model_load
+
+    return EnhancedTrainOutput(
+        train_output=train_output,
+        model_load_time=instrument_model_load,
+    )
 
 
 def main(**kwargs):
