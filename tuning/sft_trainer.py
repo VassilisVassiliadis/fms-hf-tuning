@@ -148,6 +148,9 @@ def train(
     logger.info(f"Dataset length is {len(formatted_dataset)}")
 
     aim_callback = get_aimstack_callback()
+
+    aim_callback.experiment['model_load_time'] = instrument_model_load
+
     callbacks = callbacks or []
     callbacks.extend([aim_callback, PeftSavingCallback()])
 
@@ -185,8 +188,6 @@ def train(
         trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(model)
 
     train_output: "transformers.trainer.TrainOutput" = trainer.train()
-
-    aim_callback.experiment['model_load_time'] = instrument_model_load
 
     return EnhancedTrainOutput(
         train_output=train_output,
