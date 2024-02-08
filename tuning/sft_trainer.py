@@ -14,12 +14,16 @@ from tuning.utils.data_type_utils import get_torch_dtype
 from tuning.aim_loader import get_aimstack_callback
 from transformers.utils import logging
 from dataclasses import asdict
-from typing import Optional, Union, List, NamedTuple
+from typing import Optional, Union, List, NamedTuple, TYPE_CHECKING
 
 from peft import LoraConfig
 import os
 from transformers import TrainerCallback
 from peft.utils.other import fsdp_auto_wrap_policy
+
+
+if TYPE_CHECKING:
+    from aim.sdk.run import Run
 
 class PeftSavingCallback(TrainerCallback):
     def on_save(self, args, state, control, **kwargs):
@@ -149,7 +153,8 @@ def train(
 
     aim_callback = get_aimstack_callback()
 
-    aim_callback.experiment['model_load_time'] = instrument_model_load
+    aim_run: "Run" = aim_callback.experiment
+    aim_run.track(value=instrument_model_load, name="model_load_time")
 
     callbacks = callbacks or []
     callbacks.extend([aim_callback, PeftSavingCallback()])
