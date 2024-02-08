@@ -14,7 +14,7 @@ from tuning.utils.data_type_utils import get_torch_dtype
 from tuning.aim_loader import get_aimstack_callback
 from transformers.utils import logging
 from dataclasses import asdict
-from typing import Optional, Union, List, NamedTuple, TYPE_CHECKING
+from typing import Optional, Union, List, NamedTuple, Dict, Any, TYPE_CHECKING
 
 from peft import LoraConfig
 import os
@@ -45,6 +45,7 @@ def train(
         train_args: configs.TrainingArguments,
         peft_config: Optional[Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        aim_metadata: Optional[Dict[str, Any]] = None,
    ) -> EnhancedTrainOutput:
     """Call the SFTTrainer
 
@@ -57,6 +58,7 @@ def train(
           None for fine tuning
             The peft configuration to pass to trainer
         callbacks: optional SFTTrainer callbacks
+        aim_metadata: optional metadata to record in AIM
 
     Returns:
         A EnhancedTrainOutput containing the TrainOutput of SFTTrainer.train() plus extra metrics
@@ -155,6 +157,10 @@ def train(
 
     aim_run: "Run" = aim_callback.experiment
     aim_run.track(value=instrument_model_load, name="model_load_time")
+
+    if aim_metadata:
+        for (k, v) in aim_metadata.items():
+            aim_run[k] = v
 
     callbacks = callbacks or []
     callbacks.extend([aim_callback, PeftSavingCallback()])
