@@ -14,9 +14,10 @@
 
 # Standard
 from datetime import datetime
-from typing import Optional, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Union
 import json
 import os
+import time
 
 # Third Party
 from peft.utils.other import fsdp_auto_wrap_policy
@@ -98,6 +99,11 @@ class FileLoggingCallback(TrainerCallback):
             f.write(f"{json.dumps(log_obj, sort_keys=True)}\n")
 
 
+class EnhancedTrainOutput(NamedTuple):
+    train_output: transformers.trainer.TrainOutput
+    model_load_time: float
+
+
 def train(
     model_args: configs.ModelArguments,
     data_args: configs.DataArguments,
@@ -105,7 +111,9 @@ def train(
     peft_config: Optional[
         Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]
     ] = None,
-):
+    callbacks: Optional[List[TrainerCallback]] = None,
+    aim_metadata: Optional[Dict[str, Any]] = None,
+) -> EnhancedTrainOutput:
     """Call the SFTTrainer
 
     Args:
@@ -116,6 +124,12 @@ def train(
         peft_config.PromptTuningConfig for prompt tuning | \
         None for fine tuning
             The peft configuration to pass to trainer
+                callbacks: optional SFTTrainer callbacks
+        aim_metadata: optional metadata to record in AIM
+
+    Returns:
+        A EnhancedTrainOutput containing the TrainOutput of SFTTrainer.train() plus extra metrics
+        such as model_load_time
     """
     run_distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
 
@@ -137,12 +151,15 @@ def train(
         train_args.fsdp_config = {"xla": False}
 
     task_type = "CAUSAL_LM"
+
+    instrument_model_load = time.time()
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=train_args.cache_dir,
         torch_dtype=get_torch_dtype(model_args.torch_dtype),
         use_flash_attention_2=model_args.use_flash_attn,
     )
+    instrument_model_load = time.time() - instrument_model_load
 
     peft_config = get_hf_peft_config(task_type, peft_config)
 
@@ -234,9 +251,18 @@ def train(
         logger.info(f"Validation dataset length is {len(formatted_validation_dataset)}")
 
     aim_callback = get_aimstack_callback()
+    aim_run: "Run" = aim_callback.experiment
+    aim_run.track(value=instrument_model_load, name="model_load_time")
+
+    if aim_metadata:
+        for k, v in aim_metadata.items():
+            aim_run[k] = v
+
+    callbacks = callbacks or []
+
     file_logger_callback = FileLoggingCallback(logger)
     peft_saving_callback = PeftSavingCallback()
-    callbacks = [aim_callback, peft_saving_callback, file_logger_callback]
+    callbacks.extend([aim_callback, peft_saving_callback, file_logger_callback])
 
     if train_args.packing:
         logger.info("Packing is set to True")
@@ -281,7 +307,13 @@ def train(
         trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(
             model
         )
-    trainer.train()
+
+    train_output: "transformers.trainer.TrainOutput" = trainer.train()
+
+    return EnhancedTrainOutput(
+        train_output=train_output,
+        model_load_time=instrument_model_load,
+    )
 
 
 def main(**kwargs):
