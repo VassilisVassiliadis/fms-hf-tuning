@@ -14,9 +14,10 @@
 
 # Standard
 from datetime import datetime
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 import json
 import os
+import time
 import sys
 
 # Third Party
@@ -42,6 +43,10 @@ from tuning.config import configs, peft_config
 from tuning.data import tokenizer_data_utils
 from tuning.utils.config_utils import get_hf_peft_config
 from tuning.utils.data_type_utils import get_torch_dtype
+
+if TYPE_CHECKING:
+    # Third Party
+    import aim
 
 
 class FileLoggingCallback(TrainerCallback):
@@ -121,12 +126,16 @@ def train(
         raise ValueError("gradient_accumulation_steps has to be an integer >= 1")
 
     task_type = "CAUSAL_LM"
+
+    additional_metrics = {}
+    model_load_time = time.time()
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=train_args.cache_dir,
         torch_dtype=get_torch_dtype(model_args.torch_dtype),
         use_flash_attention_2=model_args.use_flash_attn,
     )
+    additional_metrics["model_load_time"] = time.time() - model_load_time
 
     peft_config = get_hf_peft_config(task_type, peft_config)
 
