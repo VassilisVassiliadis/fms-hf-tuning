@@ -62,7 +62,7 @@ class CustomAimCallback(AimCallback):
             for m in run.metrics():
                 context = m.context.to_dict()
 
-                if m.name == "__system_gpu" and context["gpu"] in cuda_devices:
+                if m.name.startswith("__system__gpu") and context["gpu"] in cuda_devices:
                     metrics.append(
                         {
                             "name": m.name,
