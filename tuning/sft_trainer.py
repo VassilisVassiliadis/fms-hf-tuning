@@ -227,7 +227,8 @@ def train(
             "Validation dataset length is %s", len(formatted_validation_dataset)
         )
 
-    aim_callback = get_aimstack_callback()
+    aim_callback = get_aimstack_callback(additional_metrics=additional_metrics)
+
     file_logger_callback = FileLoggingCallback(logger)
     callbacks = [aim_callback, file_logger_callback]
 
