@@ -318,9 +318,16 @@ def main(**kwargs):  # pylint: disable=unused-argument
         train(model_args, data_args, training_args, tune_config)
     except torch.cuda.OutOfMemoryError:
         print(str_gpu_oom_warning)
+        import traceback
+
+        print(traceback.format_exc())
     except RuntimeError as e:
         if "CUDA error: out of memory".lower() in str(e).lower():
             print(str_gpu_oom_warning)
+
+            import traceback
+
+            print(traceback.format_exc())
         raise
 
 
