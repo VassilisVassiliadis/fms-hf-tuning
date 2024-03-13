@@ -55,17 +55,33 @@ class CustomAimCallback(AimCallback):
 
             env_variables = run["__system_params"]["env_variables"]
             cuda_visible_devices = env_variables.get("CUDA_VISIBLE_DEVICES", "")
-            cuda_visible_devices = [int(x) for x in cuda_visible_devices.split(",") if len(x) > 0]
+            cuda_visible_devices = [
+                int(x) for x in cuda_visible_devices.split(",") if len(x) > 0
+            ]
 
             metrics = []
 
+            aggregate_metrics = os.environ.get("AIM_INFO_AGGREGATE_METRICS", "false").lower() == "true"
+
             for m in run.metrics():
                 context = m.context.to_dict()
-                metrics.append({
+                values = m.values.values_list()
+
+                if aggregate_metrics:
+                    try:
+                        values = [x for x in values if x is not None]
+                        values = [sum(values) / max(1, len(values))]
+                    except ValueError:
+                        # Don't aggregate properties that are weird
+                        pass
+
+                metrics.append(
+                    {
                         "name": m.name,
-                        "values": m.values.values_list(),
+                        "values": values,
                         "context": context,
-                    })
+                    }
+                )
 
             run["metrics"] = metrics
             # Standard
