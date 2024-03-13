@@ -54,24 +54,18 @@ class CustomAimCallback(AimCallback):
                 run.track(v, name=k, context={"scope": "additional_metrics"})
 
             env_variables = run["__system_params"]["env_variables"]
-            cuda_devices = env_variables.get("CUDA_VISIBLE_DEVICES", "")
-            cuda_devices = [int(x) for x in cuda_devices.split(",") if len(x) > 0]
+            cuda_visible_devices = env_variables.get("CUDA_VISIBLE_DEVICES", "")
+            cuda_visible_devices = [int(x) for x in cuda_visible_devices.split(",") if len(x) > 0]
 
             metrics = []
 
             for m in run.metrics():
                 context = m.context.to_dict()
-
-                if m.name.startswith("__system__gpu") and context["gpu"] in cuda_devices:
-                    metrics.append(
-                        {
-                            "name": m.name,
-                            "values": m.values.values_list(),
-                            "gpu": context["gpu"],
-                        }
-                    )
-                elif m.name != "__system_gpu":
-                    metrics.append({"name": m.name, "values": m.values.values_list()})
+                metrics.append({
+                        "name": m.name,
+                        "values": m.values.values_list(),
+                        "context": context,
+                    })
 
             run["metrics"] = metrics
             # Standard
@@ -82,6 +76,7 @@ class CustomAimCallback(AimCallback):
                     {
                         "run_hash": run.hash,
                         "metrics": metrics,
+                        "cuda_visible_devices": cuda_visible_devices,
                     },
                     f,
                 )
