@@ -33,9 +33,11 @@ class CustomAimCallback(AimCallback):
         log_system_params: Optional[bool] = True,
         capture_terminal_logs: Optional[bool] = True,
         additional_metrics: Optional[Dict[str, Any]] = None,
+        aim_info_path: Optional[str] = None,
     ):
 
         self._additional_metrics = additional_metrics or {}
+        self._aim_info_path = aim_info_path
 
         super().__init__(
             repo,
@@ -47,7 +49,7 @@ class CustomAimCallback(AimCallback):
 
     def on_train_end(self, args, state, control, **kwargs):
 
-        if state.is_world_process_zero:
+        if self._aim_info_path and state.is_world_process_zero:
             run: aim.Run = self.experiment
 
             for k, v in self._additional_metrics.items():
@@ -61,7 +63,9 @@ class CustomAimCallback(AimCallback):
 
             metrics = []
 
-            aggregate_metrics = os.environ.get("AIM_INFO_AGGREGATE_METRICS", "false").lower() == "true"
+            aggregate_metrics = (
+                os.environ.get("AIM_INFO_AGGREGATE_METRICS", "false").lower() == "true"
+            )
 
             for m in run.metrics():
                 context = m.context.to_dict()
@@ -84,10 +88,11 @@ class CustomAimCallback(AimCallback):
                 )
 
             run["metrics"] = metrics
+
             # Standard
             import json
 
-            with open("aim_info.json", "w", encoding="utf-8") as f:
+            with open(self._aim_info_path, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "run_hash": run.hash,
@@ -102,11 +107,16 @@ class CustomAimCallback(AimCallback):
 
 def get_aimstack_callback(
     additional_metrics: Optional[Dict[str, Any]] = None,
+    aim_info_path: Optional[str] = None,
 ):
     # Initialize a new run
     aim_server = os.environ.get("AIMSTACK_SERVER")
     aim_db = os.environ.get("AIMSTACK_DB")
     aim_experiment = os.environ.get("AIMSTACK_EXPERIMENT")
+
+    if aim_info_path is None:
+        aim_info_path = os.environ.get("AIM_INFO_PATH")
+
     if aim_experiment is None:
         aim_experiment = ""
 
@@ -115,12 +125,19 @@ def get_aimstack_callback(
             repo="aim://" + aim_server + "/",
             experiment=aim_experiment,
             additional_metrics=additional_metrics,
+            aim_info_path=aim_info_path,
         )
     elif aim_db:
-        aim_callback = CustomAimCallback(repo=aim_db, experiment=aim_experiment)
+        aim_callback = CustomAimCallback(
+            repo=aim_db,
+            experiment=aim_experiment,
+            aim_info_path=aim_info_path,
+        )
     else:
         aim_callback = CustomAimCallback(
-            experiment=aim_experiment, additional_metrics=additional_metrics
+            experiment=aim_experiment,
+            additional_metrics=additional_metrics,
+            aim_info_path=aim_info_path,
         )
 
     return aim_callback

@@ -14,7 +14,7 @@
 
 # Standard
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional, Union, NamedTuple, List, Any, Dict
 import json
 import os
 import sys
@@ -93,6 +93,12 @@ class FileLoggingCallback(TrainerCallback):
             f.write(f"{json.dumps(log_obj, sort_keys=True)}\n")
 
 
+class EnhancedTrainOutput(NamedTuple):
+    train_output: transformers.trainer.TrainOutput
+    model_load_time: float
+    aim_run_nash: str
+
+
 def train(
     model_args: configs.ModelArguments,
     data_args: configs.DataArguments,
@@ -100,6 +106,8 @@ def train(
     peft_config: Optional[  # pylint: disable=redefined-outer-name
         Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]
     ] = None,
+    callbacks: Optional[List[TrainerCallback]] = None,
+    aim_metadata: Optional[Dict[str, Any]] = None,
 ):
     """Call the SFTTrainer
 
@@ -229,8 +237,16 @@ def train(
 
     aim_callback = get_aimstack_callback(additional_metrics=additional_metrics)
 
+    aim_run: "aim.Run" = aim_callback.experiment
+
+    if aim_metadata:
+        for k, v in aim_metadata.items():
+            aim_run[k] = v
+
+    callbacks = callbacks or []
+
     file_logger_callback = FileLoggingCallback(logger)
-    callbacks = [aim_callback, file_logger_callback]
+    callbacks.extend([aim_callback, file_logger_callback])
 
     if train_args.packing:
         logger.info("Packing is set to True")
@@ -275,7 +291,12 @@ def train(
         trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(
             model
         )
-    trainer.train()
+    train_output: "transformers.trainer.TrainOutput" = trainer.train()
+
+    return EnhancedTrainOutput(
+        train_output=train_output,
+        model_load_time=model_load_time,
+    )
 
 
 def main(**kwargs):  # pylint: disable=unused-argument
@@ -313,20 +334,28 @@ def main(**kwargs):  # pylint: disable=unused-argument
     # Third Party
     import torch.cuda
 
+    aim_info_path = os.environ.get("AIM_INFO_PATH", "aim_info.json")
+
     str_gpu_oom_warning = "SFTTRAINER_EXCEPTION: OUT_OF_MEMORY"
     try:
         train(model_args, data_args, training_args, tune_config)
-    except torch.cuda.OutOfMemoryError:
+    except torch.cuda.OutOfMemoryError as e:
         print(str_gpu_oom_warning)
+        # Standard
         import traceback
 
         print(traceback.format_exc())
+        with open(aim_info_path, "w", encoding="utf-8") as f:
+            json.dump({"error": "OutOfGPUMemoryError", "exception": str(e)}, f)
     except RuntimeError as e:
         if "CUDA error: out of memory".lower() in str(e).lower():
             print(str_gpu_oom_warning)
 
+            # Standard
             import traceback
 
+            with open(aim_info_path, "w", encoding="utf-8") as f:
+                json.dump({"error": "OutOfGPUMemoryError", "exception": str(e)}, f)
             print(traceback.format_exc())
         raise
 
