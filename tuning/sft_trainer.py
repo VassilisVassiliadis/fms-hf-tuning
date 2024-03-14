@@ -14,11 +14,13 @@
 
 # Standard
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Union, NamedTuple, List, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Union
+import dataclasses
 import json
 import os
 import sys
 import time
+import typing
 
 # Third Party
 from peft.utils.other import fsdp_auto_wrap_policy
@@ -298,6 +300,16 @@ def train(
     )
 
 
+@dataclasses.dataclass
+class CustomArgs:
+    aim_metadata_path: typing.Optional[str] = dataclasses.field(
+        default=None,
+        metadata={
+            "help": "Path to JSON file containing metadata that sft_trainer.py will store in AIM"
+        },
+    )
+
+
 def main(**kwargs):  # pylint: disable=unused-argument
     parser = transformers.HfArgumentParser(
         dataclass_types=(
@@ -306,6 +318,7 @@ def main(**kwargs):  # pylint: disable=unused-argument
             configs.TrainingArguments,
             peft_config.LoraConfig,
             peft_config.PromptTuningConfig,
+            CustomArgs,
         )
     )
     parser.add_argument(
@@ -314,15 +327,24 @@ def main(**kwargs):  # pylint: disable=unused-argument
         choices=["pt", "lora", None, "none"],
         default="pt",
     )
+
     (
         model_args,
         data_args,
         training_args,
         lora_config,
         prompt_tuning_config,
+        custom_args,
         peft_method,
         _,
     ) = parser.parse_args_into_dataclasses(return_remaining_strings=True)
+
+    if custom_args.aim_metadata_path is not None:
+        with open(custom_args.aim_metadata_path, "r", encoding="utf-8") as f:
+            aim_metadata = json.load(f)
+    else:
+        aim_metadata = None
+
     if peft_method.peft_method == "lora":
         tune_config = lora_config
     elif peft_method.peft_method == "pt":
@@ -337,7 +359,9 @@ def main(**kwargs):  # pylint: disable=unused-argument
 
     str_gpu_oom_warning = "SFTTRAINER_EXCEPTION: OUT_OF_MEMORY"
     try:
-        train(model_args, data_args, training_args, tune_config)
+        train(
+            model_args, data_args, training_args, tune_config, aim_metadata=aim_metadata
+        )
     except torch.cuda.OutOfMemoryError as e:
         print(str_gpu_oom_warning)
         # Standard
