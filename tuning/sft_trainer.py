@@ -96,7 +96,6 @@ class FileLoggingCallback(TrainerCallback):
 class EnhancedTrainOutput(NamedTuple):
     train_output: transformers.trainer.TrainOutput
     model_load_time: float
-    aim_run_nash: str
 
 
 def train(
