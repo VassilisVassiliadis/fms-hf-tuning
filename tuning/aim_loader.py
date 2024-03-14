@@ -47,6 +47,15 @@ class CustomAimCallback(AimCallback):
             capture_terminal_logs,
         )
 
+    def on_train_begin(self, args, state, control, model=None, **kwargs):
+        super().on_train_begin(args, state, control, model, **kwargs)
+
+        if state.is_world_process_zero:
+            run: aim.Run = self.experiment
+
+            for k, v in self._additional_metrics.items():
+                run.track(v, name=k, context={"scope": "additional_metrics"})
+
     def on_train_end(self, args, state, control, **kwargs):
 
         if self._aim_info_path and state.is_world_process_zero:
@@ -86,8 +95,6 @@ class CustomAimCallback(AimCallback):
                         "context": context,
                     }
                 )
-
-            run["metrics"] = metrics
 
             # Standard
             import json
@@ -131,6 +138,7 @@ def get_aimstack_callback(
         aim_callback = CustomAimCallback(
             repo=aim_db,
             experiment=aim_experiment,
+            additional_metrics=additional_metrics,
             aim_info_path=aim_info_path,
         )
     else:
