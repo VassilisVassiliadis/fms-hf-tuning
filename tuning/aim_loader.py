@@ -13,27 +13,138 @@
 # limitations under the License.
 
 # Standard
+from typing import Any, Dict, Optional
 import os
+import typing
 
 # Third Party
+from aim.ext.resource import DEFAULT_SYSTEM_TRACKING_INT
 from aim.hugging_face import AimCallback
+import aim
 
 
-def get_aimstack_callback():
+class CustomAimCallback(AimCallback):
+
+    def __init__(
+        self,
+        repo: Optional[str] = None,
+        experiment: Optional[str] = None,
+        system_tracking_interval: Optional[int] = DEFAULT_SYSTEM_TRACKING_INT,
+        log_system_params: Optional[bool] = True,
+        capture_terminal_logs: Optional[bool] = True,
+        additional_metrics: Optional[Dict[str, Any]] = None,
+        aim_info_path: Optional[str] = None,
+        aim_info_aggregate_metrics: bool = False,
+    ):
+
+        self._additional_metrics = additional_metrics or {}
+        self._aim_info_path = aim_info_path
+        self._aim_info_aggregate_metrics = aim_info_aggregate_metrics
+
+        super().__init__(
+            repo,
+            experiment,
+            system_tracking_interval,
+            log_system_params,
+            capture_terminal_logs,
+        )
+
+    def on_train_begin(self, args, state, control, model=None, **kwargs):
+        super().on_train_begin(args, state, control, model, **kwargs)
+
+        if state.is_world_process_zero:
+            run: aim.Run = self.experiment
+
+            for k, v in self._additional_metrics.items():
+                run.track(v, name=k, context={"scope": "additional_metrics"})
+
+    def on_train_end(self, args, state, control, **kwargs):
+
+        if self._aim_info_path and state.is_world_process_zero:
+            run: aim.Run = self.experiment
+
+            for k, v in self._additional_metrics.items():
+                run.track(v, name=k, context={"scope": "additional_metrics"})
+
+            env_variables = run["__system_params"]["env_variables"]
+            cuda_visible_devices = env_variables.get("CUDA_VISIBLE_DEVICES", "")
+            cuda_visible_devices = [
+                int(x) for x in cuda_visible_devices.split(",") if len(x) > 0
+            ]
+
+            metrics = []
+
+            for m in run.metrics():
+                context = m.context.to_dict()
+                values = m.values.values_list()
+
+                if self._aim_info_aggregate_metrics:
+                    try:
+                        values = [x for x in values if x is not None]
+                        values = [sum(values) / max(1, len(values))]
+                    except ValueError:
+                        # Don't aggregate properties that are weird
+                        pass
+
+                metrics.append(
+                    {
+                        "name": m.name,
+                        "values": values,
+                        "context": context,
+                    }
+                )
+
+            # Standard
+            import json
+
+            with open(self._aim_info_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "run_hash": run.hash,
+                        "metrics": metrics,
+                        "cuda_visible_devices": cuda_visible_devices,
+                    },
+                    f,
+                )
+
+        super().on_train_end(args=args, state=state, control=control, **kwargs)
+
+
+def get_aimstack_callback(
+    additional_metrics: Optional[Dict[str, Any]] = None,
+    aim_info_path: Optional[str] = None,
+    aim_info_aggregate_metrics: bool = False,
+):
     # Initialize a new run
     aim_server = os.environ.get("AIMSTACK_SERVER")
     aim_db = os.environ.get("AIMSTACK_DB")
     aim_experiment = os.environ.get("AIMSTACK_EXPERIMENT")
+
     if aim_experiment is None:
         aim_experiment = ""
 
     if aim_server:
-        aim_callback = AimCallback(
-            repo="aim://" + aim_server + "/", experiment=aim_experiment
+        aim_callback = CustomAimCallback(
+            repo="aim://" + aim_server + "/",
+            experiment=aim_experiment,
+            additional_metrics=additional_metrics,
+            aim_info_path=aim_info_path,
+            aim_info_aggregate_metrics=aim_info_aggregate_metrics,
         )
-    if aim_db:
-        aim_callback = AimCallback(repo=aim_db, experiment=aim_experiment)
+    elif aim_db:
+        aim_callback = CustomAimCallback(
+            repo=aim_db,
+            experiment=aim_experiment,
+            additional_metrics=additional_metrics,
+            aim_info_path=aim_info_path,
+            aim_info_aggregate_metrics=aim_info_aggregate_metrics,
+        )
     else:
-        aim_callback = AimCallback(experiment=aim_experiment)
+        aim_callback = CustomAimCallback(
+            experiment=aim_experiment,
+            additional_metrics=additional_metrics,
+            aim_info_path=aim_info_path,
+            aim_info_aggregate_metrics=aim_info_aggregate_metrics,
+        )
 
     return aim_callback

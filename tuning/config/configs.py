@@ -72,3 +72,28 @@ class TrainingArguments(transformers.TrainingArguments):
         default=False,
         metadata={"help": "Packing to be enabled in SFT Trainer, default is False"},
     )
+
+
+@dataclass
+class CustomArgs:
+    aim_metadata_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to JSON file containing metadata that sft_trainer.py will store in AIM"
+        },
+    )
+
+    aim_info_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The path to a JSON file that sft_trainer.py will use to store the metrics that AIM captures. "
+            "If unset, the script will not produce the file"
+        },
+    )
+
+    aim_info_aggregate_metrics: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to store the mean values of the metrics that AIM measures in the aim_info_path file"
+        },
+    )

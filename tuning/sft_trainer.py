@@ -14,10 +14,13 @@
 
 # Standard
 from datetime import datetime
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Union
+import dataclasses
 import json
 import os
 import sys
+import time
+import typing
 
 # Third Party
 from peft.utils.other import fsdp_auto_wrap_policy
@@ -42,6 +45,10 @@ from tuning.config import configs, peft_config
 from tuning.data import tokenizer_data_utils
 from tuning.utils.config_utils import get_hf_peft_config
 from tuning.utils.data_type_utils import get_torch_dtype
+
+if TYPE_CHECKING:
+    # Third Party
+    import aim
 
 
 class FileLoggingCallback(TrainerCallback):
@@ -88,13 +95,21 @@ class FileLoggingCallback(TrainerCallback):
             f.write(f"{json.dumps(log_obj, sort_keys=True)}\n")
 
 
+class EnhancedTrainOutput(NamedTuple):
+    train_output: transformers.trainer.TrainOutput
+    model_load_time: float
+
+
 def train(
     model_args: configs.ModelArguments,
     data_args: configs.DataArguments,
     train_args: configs.TrainingArguments,
+    custom_args: configs.CustomArgs,
     peft_config: Optional[  # pylint: disable=redefined-outer-name
         Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]
     ] = None,
+    callbacks: Optional[List[TrainerCallback]] = None,
+    aim_metadata: Optional[Dict[str, Any]] = None,
 ):
     """Call the SFTTrainer
 
@@ -102,6 +117,7 @@ def train(
         model_args: tuning.config.configs.ModelArguments
         data_args: tuning.config.configs.DataArguments
         train_args: tuning.config.configs.TrainingArguments
+        custom_args: extra arguments that we use for extracting system level metrics
         peft_config: peft_config.LoraConfig for Lora tuning | \
         peft_config.PromptTuningConfig for prompt tuning | \
         None for fine tuning
@@ -121,12 +137,16 @@ def train(
         raise ValueError("gradient_accumulation_steps has to be an integer >= 1")
 
     task_type = "CAUSAL_LM"
+
+    additional_metrics = {}
+    model_load_time = time.time()
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=train_args.cache_dir,
         torch_dtype=get_torch_dtype(model_args.torch_dtype),
         use_flash_attention_2=model_args.use_flash_attn,
     )
+    additional_metrics["model_load_time"] = time.time() - model_load_time
 
     peft_config = get_hf_peft_config(task_type, peft_config)
 
@@ -218,9 +238,22 @@ def train(
             "Validation dataset length is %s", len(formatted_validation_dataset)
         )
 
-    aim_callback = get_aimstack_callback()
+    aim_callback = get_aimstack_callback(
+        additional_metrics=additional_metrics,
+        aim_info_path=custom_args.aim_info_path,
+        aim_info_aggregate_metrics=custom_args.aim_info_aggregate_metrics,
+    )
+
+    aim_run: "aim.Run" = aim_callback.experiment
+
+    if aim_metadata:
+        for k, v in aim_metadata.items():
+            aim_run[k] = v
+
+    callbacks = callbacks or []
+
     file_logger_callback = FileLoggingCallback(logger)
-    callbacks = [aim_callback, file_logger_callback]
+    callbacks.extend([aim_callback, file_logger_callback])
 
     if train_args.packing:
         logger.info("Packing is set to True")
@@ -265,7 +298,12 @@ def train(
         trainer.accelerator.state.fsdp_plugin.auto_wrap_policy = fsdp_auto_wrap_policy(
             model
         )
-    trainer.train()
+    train_output: "transformers.trainer.TrainOutput" = trainer.train()
+
+    return EnhancedTrainOutput(
+        train_output=train_output,
+        model_load_time=model_load_time,
+    )
 
 
 def main(**kwargs):  # pylint: disable=unused-argument
@@ -276,6 +314,7 @@ def main(**kwargs):  # pylint: disable=unused-argument
             configs.TrainingArguments,
             peft_config.LoraConfig,
             peft_config.PromptTuningConfig,
+            configs.CustomArgs,
         )
     )
     parser.add_argument(
@@ -284,22 +323,39 @@ def main(**kwargs):  # pylint: disable=unused-argument
         choices=["pt", "lora", None, "none"],
         default="pt",
     )
+
     (
         model_args,
         data_args,
         training_args,
         lora_config,
         prompt_tuning_config,
+        custom_args,
         peft_method,
         _,
     ) = parser.parse_args_into_dataclasses(return_remaining_strings=True)
+
+    if custom_args.aim_metadata_path is not None:
+        with open(custom_args.aim_metadata_path, "r", encoding="utf-8") as f:
+            aim_metadata = json.load(f)
+    else:
+        aim_metadata = None
+
     if peft_method.peft_method == "lora":
         tune_config = lora_config
     elif peft_method.peft_method == "pt":
         tune_config = prompt_tuning_config
     else:
         tune_config = None
-    train(model_args, data_args, training_args, tune_config)
+
+    train(
+        model_args=model_args,
+        data_args=data_args,
+        train_args=training_args,
+        custom_args=custom_args,
+        peft_config=tune_config,
+        aim_metadata=aim_metadata,
+    )
 
 
 if __name__ == "__main__":
