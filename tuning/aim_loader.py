@@ -34,10 +34,12 @@ class CustomAimCallback(AimCallback):
         capture_terminal_logs: Optional[bool] = True,
         additional_metrics: Optional[Dict[str, Any]] = None,
         aim_info_path: Optional[str] = None,
+        aim_info_aggregate_metrics: bool = False,
     ):
 
         self._additional_metrics = additional_metrics or {}
         self._aim_info_path = aim_info_path
+        self._aim_info_aggregate_metrics = aim_info_aggregate_metrics
 
         super().__init__(
             repo,
@@ -72,15 +74,11 @@ class CustomAimCallback(AimCallback):
 
             metrics = []
 
-            aggregate_metrics = (
-                os.environ.get("AIM_INFO_AGGREGATE_METRICS", "false").lower() == "true"
-            )
-
             for m in run.metrics():
                 context = m.context.to_dict()
                 values = m.values.values_list()
 
-                if aggregate_metrics:
+                if self._aim_info_aggregate_metrics:
                     try:
                         values = [x for x in values if x is not None]
                         values = [sum(values) / max(1, len(values))]
@@ -115,14 +113,12 @@ class CustomAimCallback(AimCallback):
 def get_aimstack_callback(
     additional_metrics: Optional[Dict[str, Any]] = None,
     aim_info_path: Optional[str] = None,
+    aim_info_aggregate_metrics: bool = False,
 ):
     # Initialize a new run
     aim_server = os.environ.get("AIMSTACK_SERVER")
     aim_db = os.environ.get("AIMSTACK_DB")
     aim_experiment = os.environ.get("AIMSTACK_EXPERIMENT")
-
-    if aim_info_path is None:
-        aim_info_path = os.environ.get("AIM_INFO_PATH")
 
     if aim_experiment is None:
         aim_experiment = ""
@@ -133,6 +129,7 @@ def get_aimstack_callback(
             experiment=aim_experiment,
             additional_metrics=additional_metrics,
             aim_info_path=aim_info_path,
+            aim_info_aggregate_metrics=aim_info_aggregate_metrics,
         )
     elif aim_db:
         aim_callback = CustomAimCallback(
@@ -140,12 +137,14 @@ def get_aimstack_callback(
             experiment=aim_experiment,
             additional_metrics=additional_metrics,
             aim_info_path=aim_info_path,
+            aim_info_aggregate_metrics=aim_info_aggregate_metrics,
         )
     else:
         aim_callback = CustomAimCallback(
             experiment=aim_experiment,
             additional_metrics=additional_metrics,
             aim_info_path=aim_info_path,
+            aim_info_aggregate_metrics=aim_info_aggregate_metrics,
         )
 
     return aim_callback

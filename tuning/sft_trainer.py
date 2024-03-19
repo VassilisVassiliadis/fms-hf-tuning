@@ -104,6 +104,7 @@ def train(
     model_args: configs.ModelArguments,
     data_args: configs.DataArguments,
     train_args: configs.TrainingArguments,
+    custom_args: configs.CustomArgs,
     peft_config: Optional[  # pylint: disable=redefined-outer-name
         Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]
     ] = None,
@@ -116,6 +117,7 @@ def train(
         model_args: tuning.config.configs.ModelArguments
         data_args: tuning.config.configs.DataArguments
         train_args: tuning.config.configs.TrainingArguments
+        custom_args: extra arguments that we use for extracting system level metrics
         peft_config: peft_config.LoraConfig for Lora tuning | \
         peft_config.PromptTuningConfig for prompt tuning | \
         None for fine tuning
@@ -236,7 +238,11 @@ def train(
             "Validation dataset length is %s", len(formatted_validation_dataset)
         )
 
-    aim_callback = get_aimstack_callback(additional_metrics=additional_metrics)
+    aim_callback = get_aimstack_callback(
+        additional_metrics=additional_metrics,
+        aim_info_path=custom_args.aim_info_path,
+        aim_info_aggregate_metrics=custom_args.aim_info_aggregate_metrics,
+    )
 
     aim_run: "aim.Run" = aim_callback.experiment
 
@@ -300,16 +306,6 @@ def train(
     )
 
 
-@dataclasses.dataclass
-class CustomArgs:
-    aim_metadata_path: typing.Optional[str] = dataclasses.field(
-        default=None,
-        metadata={
-            "help": "Path to JSON file containing metadata that sft_trainer.py will store in AIM"
-        },
-    )
-
-
 def main(**kwargs):  # pylint: disable=unused-argument
     parser = transformers.HfArgumentParser(
         dataclass_types=(
@@ -318,7 +314,7 @@ def main(**kwargs):  # pylint: disable=unused-argument
             configs.TrainingArguments,
             peft_config.LoraConfig,
             peft_config.PromptTuningConfig,
-            CustomArgs,
+            configs.CustomArgs,
         )
     )
     parser.add_argument(
@@ -352,35 +348,14 @@ def main(**kwargs):  # pylint: disable=unused-argument
     else:
         tune_config = None
 
-    # Third Party
-    import torch.cuda
-
-    aim_info_path = os.environ.get("AIM_INFO_PATH", "aim_info.json")
-
-    str_gpu_oom_warning = "SFTTRAINER_EXCEPTION: OUT_OF_MEMORY"
-    try:
-        train(
-            model_args, data_args, training_args, tune_config, aim_metadata=aim_metadata
-        )
-    except torch.cuda.OutOfMemoryError as e:
-        print(str_gpu_oom_warning)
-        # Standard
-        import traceback
-
-        print(traceback.format_exc())
-        with open(aim_info_path, "w", encoding="utf-8") as f:
-            json.dump({"error": "OutOfGPUMemoryError", "exception": str(e)}, f)
-    except RuntimeError as e:
-        if "CUDA error: out of memory".lower() in str(e).lower():
-            print(str_gpu_oom_warning)
-
-            # Standard
-            import traceback
-
-            with open(aim_info_path, "w", encoding="utf-8") as f:
-                json.dump({"error": "OutOfGPUMemoryError", "exception": str(e)}, f)
-            print(traceback.format_exc())
-        raise
+    train(
+        model_args=model_args,
+        data_args=data_args,
+        train_args=training_args,
+        custom_args=custom_args,
+        peft_config=tune_config,
+        aim_metadata=aim_metadata,
+    )
 
 
 if __name__ == "__main__":
