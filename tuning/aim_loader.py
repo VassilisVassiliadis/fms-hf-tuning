@@ -56,7 +56,7 @@ class CustomAimCallback(AimCallback):
             run: aim.Run = self.experiment
 
             for k, v in self._additional_metrics.items():
-                run.track(v, name=k, context={"scope": "additional_metrics"})
+                run[k] = v
 
     def on_train_end(self, args, state, control, **kwargs):
 
