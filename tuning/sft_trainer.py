@@ -14,7 +14,7 @@
 
 # Standard
 from datetime import datetime
-from typing import Optional, Union
+from typing import Any, Callable, List, Optional, Union
 import json
 import os
 import sys
@@ -101,6 +101,7 @@ def train(
         Union[peft_config.LoraConfig, peft_config.PromptTuningConfig]
     ] = None,
     trainer_controller_args: configs.TrainerControllerArguments = None,
+    callbacks: Optional[List[Callable[[], Any]]] = None,
 ):
     """Call the SFTTrainer
 
@@ -114,6 +115,7 @@ def train(
             The peft configuration to pass to trainer
         trainer_control_args: configs.TrainerControllerArguments \
             for controlling the training loop using policy rules
+        callbacks: SFTTrainer callbacks
     """
 
     logger = logging.get_logger("sft_trainer")
@@ -223,9 +225,10 @@ def train(
             "Validation dataset length is %s", len(formatted_validation_dataset)
         )
 
-    callbacks = [FileLoggingCallback(logger)]
-    if is_aim_available():
-        callbacks.append(get_aimstack_callback())
+    if callbacks is None:
+        callbacks = []
+
+    callbacks.append(FileLoggingCallback(logger))
 
     if (trainer_controller_args is not None) and (
         trainer_controller_args.trainer_controller_config_file is not None
@@ -281,7 +284,7 @@ def train(
     trainer.train()
 
 
-def main(**kwargs):  # pylint: disable=unused-argument
+def parse_args():
     parser = transformers.HfArgumentParser(
         dataclass_types=(
             configs.ModelArguments,
@@ -314,7 +317,38 @@ def main(**kwargs):  # pylint: disable=unused-argument
         tune_config = prompt_tuning_config
     else:
         tune_config = None
-    train(model_args, data_args, training_args, tune_config, trainer_controller_args)
+
+    return (
+        model_args,
+        data_args,
+        training_args,
+        tune_config,
+        trainer_controller_args,
+    )
+
+
+def main(**kwargs):  # pylint: disable=unused-argument
+    (
+        model_args,
+        data_args,
+        training_args,
+        tune_config,
+        trainer_controller_args,
+    ) = parse_args()
+
+    callbacks = []
+
+    if is_aim_available():
+        callbacks.append(get_aimstack_callback())
+
+    train(
+        model_args,
+        data_args,
+        training_args,
+        tune_config,
+        trainer_controller_args,
+        callbacks,
+    )
 
 
 if __name__ == "__main__":
